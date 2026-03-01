@@ -24,6 +24,57 @@ const CITIES = [
   { city: "Dubai",         country: "UAE",            code: "DXB", flag: "🇦🇪" },
 ];
 
+
+// ─── AIRLINE LOOKUP ───────────────────────────────────────────────────────────
+const AIRLINES = {
+  "AF": { name: "Air France",         logo: "🇫🇷" },
+  "BA": { name: "British Airways",    logo: "🇬🇧" },
+  "LH": { name: "Lufthansa",          logo: "🇩🇪" },
+  "TK": { name: "Turkish Airlines",   logo: "🇹🇷" },
+  "EK": { name: "Emirates",           logo: "🇦🇪" },
+  "QR": { name: "Qatar Airways",      logo: "🇶🇦" },
+  "EY": { name: "Etihad",             logo: "🇦🇪" },
+  "SU": { name: "Aeroflot",           logo: "🇷🇺" },
+  "KC": { name: "Air Astana",         logo: "🇰🇿" },
+  "DV": { name: "SCAT Airlines",      logo: "🇰🇿" },
+  "HY": { name: "Uzbekistan Airways", logo: "🇺🇿" },
+  "PC": { name: "Pegasus",            logo: "🇹🇷" },
+  "XQ": { name: "SunExpress",         logo: "🇹🇷" },
+  "U2": { name: "easyJet",            logo: "🟠" },
+  "FR": { name: "Ryanair",            logo: "🟡" },
+  "W6": { name: "Wizz Air",           logo: "💜" },
+  "VY": { name: "Vueling",            logo: "🟡" },
+  "IB": { name: "Iberia",             logo: "🇪🇸" },
+  "AZ": { name: "ITA Airways",        logo: "🇮🇹" },
+  "KL": { name: "KLM",                logo: "🇳🇱" },
+  "LX": { name: "Swiss",              logo: "🇨🇭" },
+  "OS": { name: "Austrian",           logo: "🇦🇹" },
+  "SK": { name: "SAS",                logo: "🇸🇪" },
+  "AY": { name: "Finnair",            logo: "🇫🇮" },
+  "TP": { name: "TAP Air Portugal",   logo: "🇵🇹" },
+  "UA": { name: "United",             logo: "🇺🇸" },
+  "AA": { name: "American",           logo: "🇺🇸" },
+  "DL": { name: "Delta",              logo: "🇺🇸" },
+  "NH": { name: "ANA",                logo: "🇯🇵" },
+  "JL": { name: "Japan Airlines",     logo: "🇯🇵" },
+  "SQ": { name: "Singapore Airlines", logo: "🇸🇬" },
+  "CX": { name: "Cathay Pacific",     logo: "🇭🇰" },
+  "TG": { name: "Thai Airways",       logo: "🇹🇭" },
+  "QF": { name: "Qantas",             logo: "🇦🇺" },
+};
+
+function parseDuration(iso) {
+  // PT8H30M → "8h 30m"
+  const h = iso.match(/(\d+)H/);
+  const m = iso.match(/(\d+)M/);
+  return [h ? h[1] + "h" : "", m ? m[1] + "m" : ""].filter(Boolean).join(" ");
+}
+
+function formatTime(isoString) {
+  // "2026-04-14T10:30:00" → "10:30"
+  return isoString ? isoString.slice(11, 16) : "—";
+}
+
 // Generate date options (today + 365 days)
 function generateDateOptions() {
   const options = [];
@@ -61,14 +112,59 @@ async function getAmadeusToken() {
   return data.access_token;
 }
 
-async function fetchFlightPrice(origin, destination, date, returnDate = null) {
+async function fetchFlightData(origin, destination, date, returnDate = null) {
   const token = await getAmadeusToken();
   let url = `https://test.api.amadeus.com/v2/shopping/flight-offers?originLocationCode=${origin}&destinationLocationCode=${destination}&departureDate=${date}&adults=1&max=5&currencyCode=USD`;
   if (returnDate) url += `&returnDate=${returnDate}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   const data = await res.json();
   if (!data.data || !data.data.length) return null;
-  return Math.round(Math.min(...data.data.map((o) => parseFloat(o.price.total))));
+
+  // Sort by price, pick cheapest offer
+  const sorted = [...data.data].sort((a, b) => parseFloat(a.price.total) - parseFloat(b.price.total));
+  const best = sorted[0];
+  const price = Math.round(parseFloat(best.price.total));
+
+  // Extract outbound flight info from first itinerary first segment
+  const outbound = best.itineraries[0];
+  const seg0 = outbound.segments[0];
+  const lastSeg = outbound.segments[outbound.segments.length - 1];
+  const carrierCode = seg0.carrierCode;
+  const airline = AIRLINES[carrierCode] || { name: carrierCode, logo: "✈" };
+  const stops = outbound.segments.length - 1;
+
+  // Extract return flight info if round trip
+  let returnInfo = null;
+  if (best.itineraries[1]) {
+    const ret = best.itineraries[1];
+    const rSeg0 = ret.segments[0];
+    const rLast = ret.segments[ret.segments.length - 1];
+    const rCarrier = rSeg0.carrierCode;
+    const rAirline = AIRLINES[rCarrier] || { name: rCarrier, logo: "✈" };
+    returnInfo = {
+      airline:    rAirline.name,
+      logo:       rAirline.logo,
+      code:       rCarrier,
+      flight:     `${rCarrier}${rSeg0.number}`,
+      departs:    formatTime(rSeg0.departure.at),
+      arrives:    formatTime(rLast.arrival.at),
+      duration:   parseDuration(ret.duration),
+      stops:      ret.segments.length - 1,
+    };
+  }
+
+  return {
+    price,
+    airline:    airline.name,
+    logo:       airline.logo,
+    code:       carrierCode,
+    flight:     `${carrierCode}${seg0.number}`,
+    departs:    formatTime(seg0.departure.at),
+    arrives:    formatTime(lastSeg.arrival.at),
+    duration:   parseDuration(outbound.duration),
+    stops,
+    returnInfo,
+  };
 }
 
 function generatePriceHistory(base) {
@@ -84,8 +180,9 @@ function generatePriceHistory(base) {
 }
 
 async function buildPriceHistory(origin, destination, departureDate, returnDate = null) {
-  const realPrice = await fetchFlightPrice(origin, destination, departureDate, returnDate);
-  if (!realPrice) throw new Error(`No flights found for ${origin}→${destination} on ${departureDate}`);
+  const flightInfo = await fetchFlightData(origin, destination, departureDate, returnDate);
+  if (!flightInfo) throw new Error(`No flights found for ${origin}→${destination} on ${departureDate}`);
+  const { price: realPrice, ...rest } = flightInfo;
   const history = [];
   let price = realPrice * (0.9 + Math.random() * 0.2);
   for (let i = 29; i >= 1; i--) {
@@ -94,7 +191,7 @@ async function buildPriceHistory(origin, destination, departureDate, returnDate 
     history.push({ date: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }), price: Math.round(price) });
   }
   history.push({ date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" }), price: realPrice });
-  return history;
+  return { history, flightInfo: rest };
 }
 
 function buildPrediction(history) {
@@ -466,6 +563,42 @@ function AlertBadge({ prediction, confidence }) {
   );
 }
 
+
+// ─── FLIGHT INFO CARD ─────────────────────────────────────────────────────────
+function FlightInfoCard({ flightInfo, tripType, label = "OUTBOUND" }) {
+  if (!flightInfo) return null;
+  const stops = flightInfo.stops === 0 ? "Direct" : `${flightInfo.stops} stop${flightInfo.stops > 1 ? "s" : ""}`;
+  return (
+    <div style={{ background: "#080f1e", border: "1px solid #0d1f35", borderRadius: "12px", padding: "16px", flex: 1 }}>
+      <div style={{ fontSize: "9px", color: "#2a5080", letterSpacing: "2px", marginBottom: "12px" }}>{label}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" }}>
+        <span style={{ fontSize: "22px" }}>{flightInfo.logo}</span>
+        <div>
+          <div style={{ fontSize: "13px", color: "#fff", fontWeight: "600" }}>{flightInfo.airline}</div>
+          <div style={{ fontSize: "11px", color: "#2a5080" }}>{flightInfo.flight}</div>
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: "18px", fontWeight: "600", color: "#fff" }}>{flightInfo.departs}</div>
+          <div style={{ fontSize: "9px", color: "#2a5080", letterSpacing: "1px" }}>DEPARTS</div>
+        </div>
+        <div style={{ flex: 1, textAlign: "center" }}>
+          <div style={{ fontSize: "10px", color: "#2a5080", marginBottom: "2px" }}>{flightInfo.duration}</div>
+          <div style={{ height: "1px", background: "linear-gradient(90deg, #1e3a5f, #00e5ff, #1e3a5f)", position: "relative" }}>
+            <div style={{ position: "absolute", right: "0", top: "-4px", color: "#00e5ff", fontSize: "8px" }}>▶</div>
+          </div>
+          <div style={{ fontSize: "9px", color: flightInfo.stops === 0 ? "#00e56c" : "#ff6b35", marginTop: "2px" }}>{stops}</div>
+        </div>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: "18px", fontWeight: "600", color: "#fff" }}>{flightInfo.arrives}</div>
+          <div style={{ fontSize: "9px", color: "#2a5080", letterSpacing: "1px" }}>ARRIVES</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LoadingSpinner() {
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "200px", gap: "16px" }}>
@@ -491,9 +624,11 @@ export default function App() {
     setLoadingRoutes((l) => ({ ...l, [route.id]: true }));
     setErrorRoutes((e)   => ({ ...e, [route.id]: null }));
     try {
-      let history, prediction, confidence, avg;
+      let history, prediction, confidence, avg, flightInfo = null;
       if (hasApiKeys) {
-        history = await buildPriceHistory(route.fromCity.code, route.toCity.code, route.departDate, route.returnDate || null);
+        const result = await buildPriceHistory(route.fromCity.code, route.toCity.code, route.departDate, route.returnDate || null);
+        history    = result.history;
+        flightInfo = result.flightInfo;
         ({ prediction, confidence, avg } = buildPrediction(history));
       } else {
         const base = Math.round(150 + Math.random() * 1000);
@@ -501,9 +636,29 @@ export default function App() {
         prediction = Math.random() > 0.5 ? "rise" : "drop";
         confidence = Math.round(55 + Math.random() * 30);
         avg        = Math.round(history.reduce((a, b) => a + b.price, 0) / history.length);
+        // Demo flight info
+        const demoAirlines = ["AF", "TK", "LH", "PC", "KC"];
+        const dc = demoAirlines[Math.floor(Math.random() * demoAirlines.length)];
+        const da = AIRLINES[dc] || { name: dc, logo: "✈" };
+        flightInfo = {
+          airline: da.name, logo: da.logo, code: dc,
+          flight: `${dc}${Math.floor(100 + Math.random()*900)}`,
+          departs: `${Math.floor(6+Math.random()*14).toString().padStart(2,"0")}:${["00","15","30","45"][Math.floor(Math.random()*4)]}`,
+          arrives: `${Math.floor(6+Math.random()*14).toString().padStart(2,"0")}:${["00","15","30","45"][Math.floor(Math.random()*4)]}`,
+          duration: `${Math.floor(3+Math.random()*9)}h ${["00","15","30","45"][Math.floor(Math.random()*4)]}m`,
+          stops: Math.random() > 0.6 ? 1 : 0,
+          returnInfo: route.tripType === "round" ? {
+            airline: da.name, logo: da.logo, code: dc,
+            flight: `${dc}${Math.floor(100 + Math.random()*900)}`,
+            departs: `${Math.floor(6+Math.random()*14).toString().padStart(2,"0")}:${["00","15","30","45"][Math.floor(Math.random()*4)]}`,
+            arrives: `${Math.floor(6+Math.random()*14).toString().padStart(2,"0")}:${["00","15","30","45"][Math.floor(Math.random()*4)]}`,
+            duration: `${Math.floor(3+Math.random()*9)}h ${["00","15","30","45"][Math.floor(Math.random()*4)]}m`,
+            stops: Math.random() > 0.6 ? 1 : 0,
+          } : null,
+        };
       }
       const currentPrice = history[history.length - 1].price;
-      setRouteData((d) => ({ ...d, [route.id]: { history, prediction, confidence, avg } }));
+      setRouteData((d) => ({ ...d, [route.id]: { history, prediction, confidence, avg, flightInfo } }));
       setAlerts((a) => ({ ...a, [route.id]: a[route.id] ?? Math.round(currentPrice * 0.92) }));
     } catch (err) {
       setErrorRoutes((e) => ({ ...e, [route.id]: err.message }));
@@ -721,7 +876,7 @@ export default function App() {
 
               {/* Tabs */}
               <div style={{ display: "flex", gap: "4px", marginBottom: "20px", borderBottom: "1px solid #0d1f35" }}>
-                {[["chart","Price History"],["alert","Set Alert"],["predict","Prediction"]].map(([t, label]) => (
+                {[["chart","Price History"],["flights","Flights"],["alert","Set Alert"],["predict","Prediction"]].map(([t, label]) => (
                   <button key={t} onClick={() => setTab(t)} style={{ background: "none", border: "none", cursor: "pointer", padding: "8px 16px", fontSize: "12px", letterSpacing: "1px", fontFamily: "inherit", color: tab === t ? "#00e5ff" : "#2a5080", borderBottom: tab === t ? "2px solid #00e5ff" : "2px solid transparent", marginBottom: "-1px", transition: "color 0.15s" }}>{label}</button>
                 ))}
               </div>
@@ -730,6 +885,52 @@ export default function App() {
                 <div style={{ background: "#080f1e", border: "1px solid #0d1f35", borderRadius: "12px", padding: "20px" }}>
                   <div style={{ fontSize: "11px", color: "#2a5080", letterSpacing: "1px", marginBottom: "12px" }}>30-DAY PRICE HISTORY · Hover for details</div>
                   <PriceChart data={data.history} alertPrice={alertPrice} />
+                </div>
+              )}
+
+              {tab === "flights" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  {data.flightInfo ? (
+                    <>
+                      <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+                        <FlightInfoCard flightInfo={data.flightInfo} tripType={currentRoute.tripType} label={currentRoute.tripType === "round" ? "OUTBOUND FLIGHT" : "FLIGHT"} />
+                        {currentRoute.tripType === "round" && data.flightInfo.returnInfo && (
+                          <FlightInfoCard flightInfo={data.flightInfo.returnInfo} tripType="oneway" label="RETURN FLIGHT" />
+                        )}
+                      </div>
+                      <div style={{ background: "#080f1e", border: "1px solid #0d1f35", borderRadius: "12px", padding: "16px" }}>
+                        <div style={{ fontSize: "9px", color: "#2a5080", letterSpacing: "2px", marginBottom: "12px" }}>PRICE BREAKDOWN</div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                          {currentRoute.tripType === "round" ? (
+                            <>
+                              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                                <span style={{ fontSize: "12px", color: "#8aabcc" }}>Outbound ({data.flightInfo.flight})</span>
+                                <span style={{ fontSize: "12px", color: "#c8d8e8" }}>included</span>
+                              </div>
+                              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                                <span style={{ fontSize: "12px", color: "#8aabcc" }}>Return ({data.flightInfo.returnInfo?.flight ?? "—"})</span>
+                                <span style={{ fontSize: "12px", color: "#c8d8e8" }}>included</span>
+                              </div>
+                              <div style={{ borderTop: "1px solid #0d1f35", paddingTop: "10px", display: "flex", justifyContent: "space-between" }}>
+                                <span style={{ fontSize: "13px", color: "#fff", fontWeight: "600" }}>Total Round Trip</span>
+                                <span style={{ fontSize: "18px", color: "#00e5ff", fontWeight: "700" }}>${currentPrice}</span>
+                              </div>
+                            </>
+                          ) : (
+                            <div style={{ display: "flex", justifyContent: "space-between" }}>
+                              <span style={{ fontSize: "13px", color: "#fff", fontWeight: "600" }}>One Way ({data.flightInfo.flight})</span>
+                              <span style={{ fontSize: "18px", color: "#00e5ff", fontWeight: "700" }}>${currentPrice}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: "11px", color: "#2a5080", textAlign: "center" }}>
+                        Cheapest available offer · Prices update on page refresh · {hasApiKeys ? "Live from Amadeus" : "Demo data"}
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ color: "#4a6080", fontSize: "13px", padding: "20px" }}>No flight info available.</div>
+                  )}
                 </div>
               )}
 
