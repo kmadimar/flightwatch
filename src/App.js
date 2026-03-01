@@ -61,12 +61,11 @@ async function getAmadeusToken() {
   return data.access_token;
 }
 
-async function fetchFlightPrice(origin, destination, date) {
+async function fetchFlightPrice(origin, destination, date, returnDate = null) {
   const token = await getAmadeusToken();
-  const res = await fetch(
-    `https://test.api.amadeus.com/v2/shopping/flight-offers?originLocationCode=${origin}&destinationLocationCode=${destination}&departureDate=${date}&adults=1&max=5&currencyCode=USD`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
+  let url = `https://test.api.amadeus.com/v2/shopping/flight-offers?originLocationCode=${origin}&destinationLocationCode=${destination}&departureDate=${date}&adults=1&max=5&currencyCode=USD`;
+  if (returnDate) url += `&returnDate=${returnDate}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   const data = await res.json();
   if (!data.data || !data.data.length) return null;
   return Math.round(Math.min(...data.data.map((o) => parseFloat(o.price.total))));
@@ -84,8 +83,8 @@ function generatePriceHistory(base) {
   return history;
 }
 
-async function buildPriceHistory(origin, destination, departureDate) {
-  const realPrice = await fetchFlightPrice(origin, destination, departureDate);
+async function buildPriceHistory(origin, destination, departureDate, returnDate = null) {
+  const realPrice = await fetchFlightPrice(origin, destination, departureDate, returnDate);
   if (!realPrice) throw new Error(`No flights found for ${origin}→${destination} on ${departureDate}`);
   const history = [];
   let price = realPrice * (0.9 + Math.random() * 0.2);
@@ -116,9 +115,9 @@ function getFutureDate(days) {
 }
 
 const DEMO_ROUTES = [
-  { id: 1, fromCity: CITIES[0], toCity: CITIES[6],  departDate: getFutureDate(30) },
-  { id: 2, fromCity: CITIES[0], toCity: CITIES[10], departDate: getFutureDate(45) },
-  { id: 3, fromCity: CITIES[0], toCity: CITIES[13], departDate: getFutureDate(20) },
+  { id: 1, fromCity: CITIES[0], toCity: CITIES[6],  departDate: getFutureDate(30), returnDate: getFutureDate(37), tripType: "round" },
+  { id: 2, fromCity: CITIES[0], toCity: CITIES[10], departDate: getFutureDate(45), returnDate: null,              tripType: "oneway" },
+  { id: 3, fromCity: CITIES[0], toCity: CITIES[13], departDate: getFutureDate(20), returnDate: getFutureDate(23), tripType: "round" },
 ];
 
 // ─── CITY SEARCH DROPDOWN ─────────────────────────────────────────────────────
@@ -307,22 +306,39 @@ function DateDropdown({ value, onChange, placeholder }) {
 
 // ─── ADD ROUTE PANEL ──────────────────────────────────────────────────────────
 function AddRoutePanel({ onAdd, onCancel }) {
-  const [fromCity,    setFromCity]    = useState(null);
-  const [toCity,      setToCity]      = useState(null);
-  const [departDate,  setDepartDate]  = useState(getFutureDate(30));
-  const [error,       setError]       = useState("");
+  const [fromCity,   setFromCity]   = useState(null);
+  const [toCity,     setToCity]     = useState(null);
+  const [tripType,   setTripType]   = useState("oneway");
+  const [departDate, setDepartDate] = useState(getFutureDate(30));
+  const [returnDate, setReturnDate] = useState(getFutureDate(37));
+  const [error,      setError]      = useState("");
 
   function handleAdd() {
     if (!fromCity) return setError("Please select a departure city");
     if (!toCity)   return setError("Please select a destination city");
     if (fromCity.code === toCity.code) return setError("Origin and destination must be different");
+    if (tripType === "round" && returnDate <= departDate) return setError("Return date must be after departure");
     setError("");
-    onAdd({ fromCity, toCity, departDate });
+    onAdd({ fromCity, toCity, departDate, returnDate: tripType === "round" ? returnDate : null, tripType });
   }
+
+  const tabBtn = (active) => ({
+    flex: 1, padding: "7px", borderRadius: "6px", border: "none", cursor: "pointer",
+    fontFamily: "inherit", fontSize: "11px", fontWeight: "600", letterSpacing: "0.5px",
+    background: active ? "#00e5ff" : "transparent",
+    color: active ? "#0a1628" : "#4a6080",
+    transition: "all 0.15s",
+  });
 
   return (
     <div style={{ background: "#0a1628", border: "1px solid #1e3a5f", borderRadius: "12px", padding: "16px", display: "flex", flexDirection: "column", gap: "10px" }}>
       <div style={{ fontSize: "10px", color: "#2a5080", letterSpacing: "2px" }}>NEW ROUTE</div>
+
+      {/* Trip type toggle */}
+      <div style={{ display: "flex", gap: "4px", background: "#060e1a", padding: "4px", borderRadius: "8px", border: "1px solid #0d1f35" }}>
+        <button onClick={() => setTripType("oneway")} style={tabBtn(tripType === "oneway")}>✈ One Way</button>
+        <button onClick={() => setTripType("round")}  style={tabBtn(tripType === "round")}>🔄 Round Trip</button>
+      </div>
 
       <div>
         <div style={{ fontSize: "10px", color: "#2a5080", marginBottom: "4px", letterSpacing: "1px" }}>FROM</div>
@@ -334,9 +350,17 @@ function AddRoutePanel({ onAdd, onCancel }) {
         <CityDropdown value={toCity} onChange={setToCity} placeholder="Select destination city" exclude={fromCity} />
       </div>
 
-      <div>
-        <div style={{ fontSize: "10px", color: "#2a5080", marginBottom: "4px", letterSpacing: "1px" }}>DEPART DATE</div>
-        <DateDropdown value={departDate} onChange={setDepartDate} placeholder="Select departure date" />
+      <div style={{ display: "flex", gap: "8px" }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: "10px", color: "#2a5080", marginBottom: "4px", letterSpacing: "1px" }}>DEPART</div>
+          <DateDropdown value={departDate} onChange={setDepartDate} placeholder="Departure date" />
+        </div>
+        {tripType === "round" && (
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: "10px", color: "#00e5ff", marginBottom: "4px", letterSpacing: "1px" }}>RETURN</div>
+            <DateDropdown value={returnDate} onChange={setReturnDate} placeholder="Return date" />
+          </div>
+        )}
       </div>
 
       {error && <div style={{ fontSize: "11px", color: "#ff6b35" }}>⚠ {error}</div>}
@@ -469,7 +493,7 @@ export default function App() {
     try {
       let history, prediction, confidence, avg;
       if (hasApiKeys) {
-        history = await buildPriceHistory(route.fromCity.code, route.toCity.code, route.departDate);
+        history = await buildPriceHistory(route.fromCity.code, route.toCity.code, route.departDate, route.returnDate || null);
         ({ prediction, confidence, avg } = buildPrediction(history));
       } else {
         const base = Math.round(150 + Math.random() * 1000);
@@ -490,9 +514,18 @@ export default function App() {
 
   useEffect(() => { DEMO_ROUTES.forEach(loadRouteData); }, [loadRouteData]);
 
-  function handleAddRoute({ fromCity, toCity, departDate }) {
+
+  function handleDeleteRoute(id) {
+    const remaining = routes.filter((r) => r.id !== id);
+    setRoutes(remaining);
+    if (selectedRoute === id) {
+      setSelectedRoute(remaining.length > 0 ? remaining[0].id : null);
+    }
+  }
+
+  function handleAddRoute({ fromCity, toCity, departDate, returnDate, tripType }) {
     const id = Date.now();
-    const newRoute = { id, fromCity, toCity, departDate };
+    const newRoute = { id, fromCity, toCity, departDate, returnDate, tripType };
     setRoutes((r) => [...r, newRoute]);
     setSelectedRoute(id);
     setAddingRoute(false);
@@ -587,6 +620,13 @@ export default function App() {
             return (
               <div key={r.id} className="route-card" onClick={() => setSelectedRoute(r.id)} style={{ padding: "12px", borderRadius: "10px", cursor: "pointer", border: selectedRoute === r.id ? "1px solid #00e5ff44" : "1px solid #0d1f35", background: selectedRoute === r.id ? "#0b1e38" : "#080f1e", transition: "all 0.15s", position: "relative" }}>
                 {trig && <div style={{ position: "absolute", top: "8px", right: "8px", width: "7px", height: "7px", borderRadius: "50%", background: "#ff6b35", animation: "pulse 1s infinite" }} />}
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleDeleteRoute(r.id); }}
+                  title="Remove route"
+                  style={{ position: "absolute", bottom: "10px", right: "10px", background: "none", border: "none", cursor: "pointer", color: "#2a5080", fontSize: "14px", lineHeight: 1, padding: "2px 4px", borderRadius: "4px", opacity: 0.6 }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = "#ff6b35"; e.currentTarget.style.opacity = 1; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = "#2a5080"; e.currentTarget.style.opacity = 0.6; }}
+                >✕</button>
                 <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
                   <span style={{ fontSize: "14px" }}>{r.fromCity.flag}</span>
                   <span style={{ fontSize: "11px", color: "#00e5ff", fontWeight: "600" }}>{r.fromCity.code}</span>
@@ -594,7 +634,19 @@ export default function App() {
                   <span style={{ fontSize: "14px" }}>{r.toCity.flag}</span>
                   <span style={{ fontSize: "11px", color: "#00e5ff", fontWeight: "600" }}>{r.toCity.code}</span>
                 </div>
-                <div style={{ fontSize: "10px", color: "#2a5080" }}>{r.departDate}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "2px" }}>
+                  <span style={{ fontSize: "10px", color: "#2a5080" }}>{r.departDate}</span>
+                  {r.tripType === "round" && r.returnDate && (
+                    <span style={{ fontSize: "9px", color: "#00e5ff", background: "rgba(0,229,255,0.08)", border: "1px solid #00e5ff33", padding: "1px 5px", borderRadius: "3px" }}>
+                      → {r.returnDate}
+                    </span>
+                  )}
+                </div>
+                <div style={{ marginTop: "2px" }}>
+                  <span style={{ fontSize: "9px", letterSpacing: "1px", color: r.tripType === "round" ? "#00e56c" : "#4a6080" }}>
+                    {r.tripType === "round" ? "🔄 ROUND TRIP" : "✈ ONE WAY"}
+                  </span>
+                </div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px" }}>
                   {load ? <span style={{ fontSize: "11px", color: "#2a5080" }}>Loading…</span>
                     : err ? <span style={{ fontSize: "11px", color: "#ff6b35" }}>Error</span>
@@ -637,8 +689,15 @@ export default function App() {
                     <span style={{ color: "#2a5080" }}>→</span>
                     <span>{currentRoute.toCity.flag} {currentRoute.toCity.city}</span>
                   </div>
-                  <div style={{ fontSize: "12px", color: "#2a5080", marginTop: "5px" }}>
-                    Departing {currentRoute.departDate} · {hasApiKeys ? "Live Amadeus data" : "Demo mode"}
+                  <div style={{ fontSize: "12px", color: "#2a5080", marginTop: "5px", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                    <span>✈ {currentRoute.departDate}</span>
+                    {currentRoute.tripType === "round" && currentRoute.returnDate && (
+                      <span style={{ color: "#00e5ff" }}>🔄 Return {currentRoute.returnDate}</span>
+                    )}
+                    <span>· {hasApiKeys ? "Live Amadeus data" : "Demo mode"}</span>
+                    <span style={{ fontSize: "10px", padding: "1px 7px", borderRadius: "4px", border: currentRoute.tripType === "round" ? "1px solid #00e56c44" : "1px solid #4a608044", color: currentRoute.tripType === "round" ? "#00e56c" : "#4a6080" }}>
+                      {currentRoute.tripType === "round" ? "ROUND TRIP" : "ONE WAY"}
+                    </span>
                   </div>
                 </div>
                 <AlertBadge prediction={data.prediction} confidence={data.confidence} />
